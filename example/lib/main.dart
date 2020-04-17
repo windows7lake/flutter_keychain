@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_keychain/flutter_keychain.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() => runApp(new MyApp());
 
@@ -16,36 +17,6 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
-    initPlatformState();
-  }
-
-  // Platform messages are asynchronous, so we initialize in an async method.
-  Future<void> initPlatformState() async {
-    String platformVersion;
-    // Platform messages may fail, so we use a try/catch PlatformException.
-    try {
-      var firstStart = await FlutterKeychain.get(key: "firstStart");
-
-      if (null == firstStart) {
-        await FlutterKeychain.put(
-            key: "firstStart", value: DateTime.now().toIso8601String());
-      }
-
-      // If the widget was removed from the tree while the asynchronous platform
-      // message was in flight, we want to discard the reply rather than calling
-      // setState to update our non-existent appearance.
-      if (!mounted) return;
-
-      setState(() {
-        if (null == firstStart) {
-          _firstStart = "Was never started before. Restart and see .";
-        } else {
-          _firstStart = firstStart;
-        }
-      });
-    } on Exception catch (ae) {
-      print("Exception: " + ae.toString());
-    }
   }
 
   @override
@@ -56,7 +27,40 @@ class _MyAppState extends State<MyApp> {
           title: const Text('Plugin example app'),
         ),
         body: new Center(
-          child: new Text('First Start: $_firstStart\n'),
+          child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            GestureDetector(
+              onTap: () {},
+              child: Text('First Start: $_firstStart\n'),
+            ),
+            SizedBox(height: 20),
+            GestureDetector(
+              onTap: () {
+                Permission.storage.request();
+              },
+              child: Text('Permissinon\n'),
+            ),
+            SizedBox(height: 20),
+            GestureDetector(
+              onTap: () {
+                FlutterKeychain.put(
+                  key: "100uuidKey",
+                  value: "456123",
+                );
+                print("====== put");
+              },
+              child: Text('put\n'),
+            ),
+            SizedBox(height: 20),
+            GestureDetector(
+              onTap: () async {
+                String uuidKey = await FlutterKeychain.get(key: "100uuidKey");
+                print("====== get: $uuidKey");
+                _firstStart = uuidKey;
+                setState(() {});
+              },
+              child: Text('gut\n'),
+            ),
+          ]),
         ),
       ),
     );

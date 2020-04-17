@@ -1,11 +1,16 @@
 package be.appmire.flutterkeychain
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import androidx.core.content.ContextCompat
 import android.util.Base64
 import android.util.Log
 import io.flutter.plugin.common.MethodChannel
@@ -13,12 +18,10 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.PluginRegistry.Registrar
+import java.io.*
 import java.math.BigInteger
 import java.nio.charset.Charset
-import java.security.Key
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.SecureRandom
+import java.security.*
 import java.security.spec.AlgorithmParameterSpec
 import java.util.*
 import javax.crypto.Cipher
@@ -29,10 +32,10 @@ import javax.security.auth.x500.X500Principal
 
 interface KeyWrapper {
     @Throws(Exception::class)
-    fun wrap(key: Key): ByteArray;
+    fun wrap(key: Key): ByteArray
 
     @Throws(Exception::class)
-    fun unwrap(wrappedKey: ByteArray, algorithm: String): Key;
+    fun unwrap(wrappedKey: ByteArray, algorithm: String): Key
 }
 
 class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
@@ -50,7 +53,7 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
 
     @Throws(Exception::class)
     override fun wrap(key: Key): ByteArray {
-        val publicKey = getEntry().certificate.publicKey
+        val publicKey = getKeyStore().getCertificate(keyAlias)?.publicKey
         val cipher = getRSACipher()
         cipher.init(Cipher.WRAP_MODE, publicKey)
         return cipher.wrap(key)
@@ -58,7 +61,7 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
 
     @Throws(Exception::class)
     override fun unwrap(wrappedKey: ByteArray, algorithm: String): Key {
-        val privateKey = getEntry().privateKey
+        val privateKey = getKeyStore().getKey(keyAlias, null)
         val cipher = getRSACipher()
         cipher.init(Cipher.UNWRAP_MODE, privateKey)
 
@@ -67,7 +70,7 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
 
     @Throws(Exception::class)
     fun encrypt(input: ByteArray): ByteArray {
-        val publicKey = getEntry().certificate.publicKey
+        val publicKey = getKeyStore().getCertificate(keyAlias).publicKey
         val cipher = getRSACipher()
         cipher.init(Cipher.ENCRYPT_MODE, publicKey)
 
@@ -76,7 +79,7 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
 
     @Throws(Exception::class)
     fun decrypt(input: ByteArray): ByteArray {
-        val privateKey = getEntry().privateKey
+        val privateKey = getKeyStore().getKey(keyAlias, null)
         val cipher = getRSACipher()
         cipher.init(Cipher.DECRYPT_MODE, privateKey)
 
@@ -84,13 +87,11 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
     }
 
     @Throws(Exception::class)
-    private fun getEntry(): KeyStore.PrivateKeyEntry {
+    private fun getKeyStore(): KeyStore {
         val ks = KeyStore.getInstance(KEYSTORE_PROVIDER_ANDROID)
         ks.load(null)
 
-        return (ks.getEntry(keyAlias, null)
-                ?: throw Exception("No key found under alias: $keyAlias")) as? KeyStore.PrivateKeyEntry
-                ?: throw Exception("Not an instance of a PrivateKeyEntry")
+        return ks
     }
 
     @Throws(Exception::class)
@@ -110,24 +111,27 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
         // Added hacks for getting KeyEntry:
         // https://stackoverflow.com/questions/36652675/java-security-unrecoverablekeyexception-failed-to-obtain-information-about-priv
         // https://stackoverflow.com/questions/36488219/android-security-keystoreexception-invalid-key-blob
-        var entry: KeyStore.Entry? = null
+        var privateKey: PrivateKey? = null
+        var publicKey: PublicKey? = null
         for (i in 1..5) {
             try {
-                entry = ks.getEntry(keyAlias, null);
-                break;
+                privateKey = ks.getKey(keyAlias, null) as PrivateKey
+                publicKey = ks.getCertificate(keyAlias).publicKey
+                break
             } catch (ignored: Exception) {
             }
         }
 
-        if (entry == null) {
-            createKeys();
+        if (privateKey == null || publicKey == null) {
+            createKeys()
             try {
-                entry = ks.getEntry(keyAlias, null);
+                privateKey = ks.getKey(keyAlias, null) as PrivateKey
+                publicKey = ks.getCertificate(keyAlias).publicKey
             } catch (ignored: Exception) {
-                ks.deleteEntry(keyAlias);
+                ks.deleteEntry(keyAlias)
             }
-            if (entry == null) {
-                createKeys();
+            if (privateKey == null || publicKey == null) {
+                createKeys()
             }
         }
     }
@@ -143,17 +147,17 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
 
         val spec: AlgorithmParameterSpec
 
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
 
-      spec = android.security.KeyPairGeneratorSpec.Builder( context)
-              .setAlias(keyAlias)
-              .setSubject(X500Principal("CN=$keyAlias"))
-              .setSerialNumber(BigInteger.valueOf(1))
-              .setStartDate(start.time)
-              .setEndDate(end.time)
-              .build()
-    } else {
-        spec = KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_ENCRYPT)
+            spec = android.security.KeyPairGeneratorSpec.Builder(context)
+                .setAlias(keyAlias)
+                .setSubject(X500Principal("CN=$keyAlias"))
+                .setSerialNumber(BigInteger.valueOf(1))
+                .setStartDate(start.time)
+                .setEndDate(end.time)
+                .build()
+        } else {
+            spec = KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_ENCRYPT)
                 .setCertificateSubject(X500Principal("CN=$keyAlias"))
                 .setDigests(KeyProperties.DIGEST_SHA256)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
@@ -162,7 +166,7 @@ class RsaKeyStoreKeyWrapper(context: Context) : KeyWrapper {
                 .setCertificateNotBefore(start.time)
                 .setCertificateNotAfter(end.time)
                 .build()
-    }
+        }
         kpGenerator.initialize(spec)
         kpGenerator.generateKeyPair()
     }
@@ -211,9 +215,9 @@ class AesStringEncryptor// get the key, which is encrypted by RSA cipher.
         secureRandom.nextBytes(key)
         val secretKey = SecretKeySpec(key, KEY_ALGORITHM)
         preferences
-                .edit()
-                .putString(WRAPPED_AES_KEY_ITEM, Base64.encodeToString(keyWrapper.wrap(secretKey), Base64.DEFAULT))
-                .commit()
+            .edit()
+            .putString(WRAPPED_AES_KEY_ITEM, Base64.encodeToString(keyWrapper.wrap(secretKey), Base64.DEFAULT))
+            .apply()
         return secretKey
     }
 
@@ -266,18 +270,72 @@ class AesStringEncryptor// get the key, which is encrypted by RSA cipher.
     }
 }
 
+class FileStorage constructor(val context: Context) {
+
+    fun checkPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(context,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /* Checks if external storage is available for read and write */
+    fun isExternalStorageWritable(): Boolean {
+        val state = Environment.getExternalStorageState()
+        return Environment.MEDIA_MOUNTED == state
+    }
+
+    fun write(key: String?, value: String?): Boolean {
+        if (key.isNullOrEmpty() || value.isNullOrEmpty()) return false
+        if (!checkPermission()) return false
+        if (!isExternalStorageWritable()) return false
+        val file = File(Environment.getExternalStorageDirectory().absolutePath, ".$key")
+        if (file.exists()) file.delete()
+        file.createNewFile()
+        return try {
+            val fileWriter = FileWriter(file, true)
+            val bufferedWriter = BufferedWriter(fileWriter)
+            bufferedWriter.write(Base64.encodeToString(value.toByteArray(), Base64.DEFAULT))
+            bufferedWriter.close()
+            fileWriter.close()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun read(key: String?): String {
+        if (key.isNullOrEmpty()) return ""
+        if (!checkPermission()) return ""
+        if (!isExternalStorageWritable()) return ""
+        val file = File(Environment.getExternalStorageDirectory().absolutePath, ".$key")
+        if (!file.exists()) return ""
+        return try {
+
+            val fileReader = FileReader(file)
+            val bufferedReader = BufferedReader(fileReader)
+            val value = bufferedReader.readLine()
+            bufferedReader.close()
+            fileReader.close()
+            String(Base64.decode(value.toByteArray(), Base64.DEFAULT))
+        } catch (e: Exception) {
+            ""
+        }
+    }
+}
+
 class FlutterKeychainPlugin : MethodCallHandler {
 
     companion object {
-        lateinit private var encryptor: StringEncryptor;
-        lateinit private var preferences: SharedPreferences;
+        lateinit private var fileStorage: FileStorage
+        lateinit private var encryptor: StringEncryptor
+        lateinit private var preferences: SharedPreferences
 
         @JvmStatic
         fun registerWith(registrar: Registrar): Unit {
 
             try {
-                preferences = registrar.context().getSharedPreferences("FlutterKeychain", Context.MODE_PRIVATE);
-                encryptor = AesStringEncryptor(preferences = preferences, keyWrapper = RsaKeyStoreKeyWrapper(registrar.context()));
+                fileStorage = FileStorage(registrar.context())
+                preferences = registrar.context().getSharedPreferences("FlutterKeychain", Context.MODE_PRIVATE)
+                encryptor = AesStringEncryptor(preferences = preferences, keyWrapper = RsaKeyStoreKeyWrapper(registrar.context()))
 
                 val channel = MethodChannel(registrar.messenger(), "plugin.appmire.be/flutter_keychain")
                 channel.setMethodCallHandler(FlutterKeychainPlugin())
@@ -300,26 +358,47 @@ class FlutterKeychainPlugin : MethodCallHandler {
             when (call.method) {
                 "get" -> {
                     val encryptedValue: String? = preferences.getString(call.key(), null)
-                    val value = encryptor.decrypt(encryptedValue)
+                    if (!encryptedValue.isNullOrEmpty()) {
+                        val value = try {
+                            encryptor.decrypt(encryptedValue)
+                        } catch (e: Exception) {
+                            encryptedValue
+                        }
+                        if (fileStorage.read(call.key()).isEmpty()) {
+                            fileStorage.write(call.key(), value)
+                        }
+                        result.success(value)
+                        return
+                    }
+
+                    // from file
+                    val value = fileStorage.read(call.key())
+                    if (value.isNotEmpty()) {
+                        preferences.edit().putString(call.key(), value).apply()
+                    }
                     result.success(value)
                 }
                 "put" -> {
-                    val value = encryptor.encrypt(call.value())
-                    preferences.edit().putString(call.key(), value).commit()
+                    val value = try {
+                        encryptor.encrypt(call.value())
+                    } catch (e: Exception) {
+                        call.value()
+                    }
+                    preferences.edit().putString(call.key(), value).apply()
+                    fileStorage.write(call.key(), call.value())
                     result.success(null)
                 }
                 "remove" -> {
-                    preferences.edit().remove(call.key()).commit()
+                    preferences.edit().remove(call.key()).apply()
                     result.success(null)
                 }
                 "clear" -> {
-                    preferences.edit().clear().commit()
+                    preferences.edit().clear().apply()
                     result.success(null)
                 }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
-            Log.e("flutter_keychain", e.message)
             result.error("flutter_keychain", e.message, e)
         }
     }
