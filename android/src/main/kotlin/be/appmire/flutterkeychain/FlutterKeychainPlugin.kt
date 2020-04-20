@@ -357,25 +357,24 @@ class FlutterKeychainPlugin : MethodCallHandler {
         try {
             when (call.method) {
                 "get" -> {
-                    val encryptedValue: String? = preferences.getString(call.key(), null)
-                    if (!encryptedValue.isNullOrEmpty()) {
-                        val value = try {
-                            encryptor.decrypt(encryptedValue)
-                        } catch (e: Exception) {
-                            encryptedValue
-                        }
-                        if (fileStorage.read(call.key()).isEmpty()) {
-                            fileStorage.write(call.key(), value)
-                        }
-                        result.success(value)
-                        return
-                    }
-
                     // from file
-                    val value = fileStorage.read(call.key())
+                    var value: String = fileStorage.read(call.key())
                     if (value.isNotEmpty()) {
                         preferences.edit().putString(call.key(), value).apply()
                     }
+
+                    value = preferences.getString(call.key(), "") ?: ""
+                    if (value.isNotEmpty()) {
+                        val encryptedValue = try {
+                            encryptor.decrypt(value)
+                        } catch (e: Exception) {
+                            value
+                        }
+                        if (fileStorage.read(call.key()).isEmpty()) {
+                            fileStorage.write(call.key(), encryptedValue)
+                        }
+                    }
+
                     result.success(value)
                 }
                 "put" -> {
