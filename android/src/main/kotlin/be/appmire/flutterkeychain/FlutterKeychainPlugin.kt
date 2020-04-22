@@ -268,6 +268,14 @@ class AesStringEncryptor// get the key, which is encrypted by RSA cipher.
         val outputBytes = cipher.doFinal(payload)
         return String(outputBytes, charset)
     }
+
+    fun encryptBase64(value: String): String {
+        return Base64.encodeToString(value.toByteArray(), Base64.DEFAULT)
+    }
+
+    fun decryptBase64(value: String): String {
+        return String(Base64.decode(value.toByteArray(), Base64.DEFAULT))
+    }
 }
 
 class FileStorage constructor(val context: Context) {
@@ -293,7 +301,7 @@ class FileStorage constructor(val context: Context) {
         return try {
             val fileWriter = FileWriter(file, true)
             val bufferedWriter = BufferedWriter(fileWriter)
-            bufferedWriter.write(Base64.encodeToString(value.toByteArray(), Base64.DEFAULT))
+            bufferedWriter.write(value)
             bufferedWriter.close()
             fileWriter.close()
             true
@@ -315,7 +323,7 @@ class FileStorage constructor(val context: Context) {
             val value = bufferedReader.readLine()
             bufferedReader.close()
             fileReader.close()
-            String(Base64.decode(value.toByteArray(), Base64.DEFAULT))
+            value
         } catch (e: Exception) {
             ""
         }
@@ -326,7 +334,7 @@ class FlutterKeychainPlugin : MethodCallHandler {
 
     companion object {
         lateinit private var fileStorage: FileStorage
-        lateinit private var encryptor: StringEncryptor
+        lateinit private var encryptor: AesStringEncryptor
         lateinit private var preferences: SharedPreferences
 
         @JvmStatic
@@ -365,26 +373,15 @@ class FlutterKeychainPlugin : MethodCallHandler {
 
                     value = preferences.getString(call.key(), "") ?: ""
                     if (value.isNotEmpty()) {
-                        val encryptedValue = try {
-                            encryptor.decrypt(value)
-                        } catch (e: Exception) {
-                            value
-                        }
                         if (fileStorage.read(call.key()).isEmpty()) {
-                            fileStorage.write(call.key(), encryptedValue)
+                            fileStorage.write(call.key(), value)
                         }
                     }
 
                     result.success(value)
                 }
                 "put" -> {
-                    val value = try {
-                        encryptor.encrypt(call.value())
-                    } catch (e: Exception) {
-                        call.value()
-                    }
-                    preferences.edit().putString(call.key(), value).apply()
-                    fileStorage.write(call.key(), call.value())
+                    preferences.edit().putString(call.key(), call.value()).apply()
                     result.success(null)
                 }
                 "remove" -> {
